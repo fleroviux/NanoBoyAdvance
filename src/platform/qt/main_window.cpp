@@ -144,6 +144,82 @@ void MainWindow::CreateHelpMenu(QMenuBar* menubar) {
   });
 }
 
+void MainWindow::StartEmuThread() {
+  emulator->Reset();
+  emulator_state = EmulationState::Running;
+  framelimiter.Reset();
+
+  emulator_thread = std::thread([this] {
+    emulator_thread_running = true;
+
+    while (emulator_state == EmulationState::Running) {
+      framelimiter.Run([&] {
+        UpdateGameControllerInput();
+        emulator->Frame();
+      }, [&](int fps) {
+        this->setWindowTitle(QString{ (std::string("NanoBoyAdvance [") + std::to_string(fps) + std::string(" fps]")).c_str() });
+      });
+    }
+
+    emulator_thread_running = false;
+  });
+
+  emulator_thread.detach();  
+}
+
+bool MainWindow::LoadRom(const QString &file) {
+
+  auto& core = emulator->GetCore();
+
+  // TODO: clean this up!
+  switch (nba::BIOSLoader::Load(core, config->bios_path)) {
+    case nba::BIOSLoader::Result::CannotFindFile: {
+      // TODO: ask the user if they want to assign the file.
+      QMessageBox box {this};
+      box.setText(tr("Please reference a BIOS file in the configuration.\n\n"
+                     "Cannot find BIOS: ") + QString{config->bios_path.c_str()});
+      box.setIcon(QMessageBox::Critical);
+      box.setWindowTitle(tr("BIOS not found"));
+      box.exec();
+      return false;
+    }
+    case nba::BIOSLoader::Result::CannotOpenFile:
+    case nba::BIOSLoader::Result::BadImage: {
+      QMessageBox box {this};
+      box.setText(tr("Failed to open the BIOS file. "
+                     "Make sure that the permissions are correct and that the BIOS image is valid.\n\n"
+                     "Cannot open BIOS: ") + QString{config->bios_path.c_str()});
+      box.setIcon(QMessageBox::Critical);
+      box.setWindowTitle(tr("Cannot open BIOS"));
+      box.exec();
+      return false;
+    }
+  }
+
+  switch (nba::ROMLoader::Load(core, file.toStdString(), config->backup_type, config->force_rtc)) {
+    case nba::ROMLoader::Result::CannotFindFile: {
+      QMessageBox box {this};
+      box.setText(tr("Cannot find file: ") + QFileInfo(file).fileName());
+      box.setIcon(QMessageBox::Critical);
+      box.setWindowTitle(tr("File not found"));
+      box.exec();
+      return false;
+    }
+
+    case nba::ROMLoader::Result::CannotOpenFile:
+    case nba::ROMLoader::Result::BadImage: {
+      QMessageBox box {this};
+      box.setIcon(QMessageBox::Critical);
+      box.setText(tr("The file could not be opened. Make sure that the permissions are correct and that the ROM image is valid."));
+      box.setWindowTitle(tr("Cannot open ROM"));
+      box.exec();
+      return false;
+    }
+  }
+
+  return true;
+}
+
 bool MainWindow::eventFilter(QObject* obj, QEvent* event) {
   auto type = event->type();
 
@@ -194,72 +270,10 @@ void MainWindow::FileOpen() {
 
   auto& core = emulator->GetCore();
 
-  // TODO: clean this up!
-
-  switch (nba::BIOSLoader::Load(core, config->bios_path)) {
-    case nba::BIOSLoader::Result::CannotFindFile: {
-      // TODO: ask the user if they want to assign the file.
-      QMessageBox box {this};
-      box.setText(tr("Please reference a BIOS file in the configuration.\n\n"
-                     "Cannot find BIOS: ") + QString{config->bios_path.c_str()});
-      box.setIcon(QMessageBox::Critical);
-      box.setWindowTitle(tr("BIOS not found"));
-      box.exec();
-      return;
-    }
-    case nba::BIOSLoader::Result::CannotOpenFile:
-    case nba::BIOSLoader::Result::BadImage: {
-      QMessageBox box {this};
-      box.setText(tr("Failed to open the BIOS file. "
-                     "Make sure that the permissions are correct and that the BIOS image is valid.\n\n"
-                     "Cannot open BIOS: ") + QString{config->bios_path.c_str()});
-      box.setIcon(QMessageBox::Critical);
-      box.setWindowTitle(tr("Cannot open BIOS"));
-      box.exec();
-      return;
-    }
+  if(loadRom(file))
+  {
+    startEmuThread();
   }
-
-  switch (nba::ROMLoader::Load(core, file.toStdString(), config->backup_type, config->force_rtc)) {
-    case nba::ROMLoader::Result::CannotFindFile: {
-      QMessageBox box {this};
-      box.setText(tr("Cannot find file: ") + QFileInfo(file).fileName());
-      box.setIcon(QMessageBox::Critical);
-      box.setWindowTitle(tr("File not found"));
-      box.exec();
-      return;
-    }
-    case nba::ROMLoader::Result::CannotOpenFile:
-    case nba::ROMLoader::Result::BadImage: {
-      QMessageBox box {this};
-      box.setIcon(QMessageBox::Critical);
-      box.setText(tr("The file could not be opened. Make sure that the permissions are correct and that the ROM image is valid."));
-      box.setWindowTitle(tr("Cannot open ROM"));
-      box.exec();
-      return;
-    }
-  }
-
-  emulator->Reset();
-  emulator_state = EmulationState::Running;
-  framelimiter.Reset();
-
-  emulator_thread = std::thread([this] {
-    emulator_thread_running = true;
-
-    while (emulator_state == EmulationState::Running) {
-      framelimiter.Run([&] {
-        UpdateGameControllerInput();
-        emulator->Frame();
-      }, [&](int fps) {
-        this->setWindowTitle(QString{ (std::string("NanoBoyAdvance [") + std::to_string(fps) + std::string(" fps]")).c_str() });
-      });
-    }
-
-    emulator_thread_running = false;
-  });
-
-  emulator_thread.detach();
 }
 
 void MainWindow::FindGameController() {
